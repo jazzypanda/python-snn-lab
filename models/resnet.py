@@ -121,7 +121,7 @@ class ResNet19(nn.Module):
     def reset(self):
         # Reset all LIFNodes
         for m in self.modules():
-            if hasattr(m, 'reset'):
+            if hasattr(m, 'reset') and m is not self:
                 m.reset()
 
     def forward(self, x):

@@ -127,8 +127,8 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
         # access underlying model if DDP
         pass # We rely on default being False
     
-    metric_logger = AverageMeter('Loss')
-    acc_logger = AverageMeter('Acc')
+    metric_logger = AverageMeter('Loss', ':.4f')
+    acc_logger = AverageMeter('Acc', ':.2f')
     
     header = f'Epoch: [{epoch}]'
     
@@ -157,7 +157,8 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
         acc_logger.update(acc1.item(), batch_size)
         
         if i % 50 == 0 and utils.is_main_process():
-            print(f"{header} [{i}/{len(loader)}] Loss: {metric_logger.avg:.4f} Acc: {acc_logger.avg:.2f}")
+            lr = optimizer.param_groups[0]["lr"]
+            print(f"{header} [{i}/{len(loader)}] lr: {lr:.6f}  {str(metric_logger)}  {str(acc_logger)}")
             if writer:
                 global_step = epoch * len(loader) + i
                 writer.add_scalar('Train/Loss', metric_logger.avg, global_step)
@@ -165,7 +166,8 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
 
 def evaluate(model, loader, device, epoch=0, writer=None, monitor=None, args=None):
     model.eval()
-    acc_logger = AverageMeter('Acc')
+    loss_logger = AverageMeter('Loss', ':.4f')
+    acc_logger = AverageMeter('Acc', ':.2f')
     
     # Enable monitor for the first batch only to save IO/Time
     # Or a few batches.
@@ -189,18 +191,24 @@ def evaluate(model, loader, device, epoch=0, writer=None, monitor=None, args=Non
                 monitor_enabled_once = True
             
             output = model(image)
+            loss = nn.CrossEntropyLoss()(output, target)
+            
             acc1, = accuracy(output, target, topk=(1,))
-            acc_logger.update(acc1.item(), image.shape[0])
+            
+            batch_size = image.shape[0]
+            loss_logger.update(loss.item(), batch_size)
+            acc_logger.update(acc1.item(), batch_size)
             
             if monitor and monitor_enabled_once and i == 0:
                 monitor.set_monitor_mode(model, False)
                 monitor.flush(epoch)
                 monitor.remove() # Remove hooks immediately
 
-    print(f" * Acc@1 {acc_logger.avg:.3f}")
+    print(f" * Acc@1 {acc_logger.avg:.3f} Loss {loss_logger.avg:.4f}")
     
     if writer:
         writer.add_scalar('Test/Acc', acc_logger.avg, epoch)
+        writer.add_scalar('Test/Loss', loss_logger.avg, epoch)
         
     return acc_logger.avg
 
