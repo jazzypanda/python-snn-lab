@@ -36,6 +36,9 @@ def get_args_parser():
 def main(args):
     utils.init_distributed_mode(args)
     
+    if not hasattr(args, 'gpu'):
+        args.gpu = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
     if args.output_dir:
         # Add timestamp and config details to output dir name for clarity
         if utils.is_main_process():
