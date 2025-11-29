@@ -30,10 +30,10 @@ def get_cifar10_loaders(data_dir='./data', batch_size=128, num_workers=4, distri
 
     train_loader = DataLoader(
         train_set, batch_size=batch_size, shuffle=(train_sampler is None),
-        num_workers=num_workers, pin_memory=True, sampler=train_sampler)
+        num_workers=num_workers, pin_memory=True, sampler=train_sampler, persistent_workers=True)
 
     test_loader = DataLoader(
         test_set, batch_size=batch_size, shuffle=False,
-        num_workers=num_workers, pin_memory=True, sampler=test_sampler)
+        num_workers=num_workers, pin_memory=True, sampler=test_sampler, persistent_workers=True)
 
     return train_loader, test_loader, train_sampler

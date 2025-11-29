@@ -19,6 +19,8 @@ def get_args_parser():
     parser.add_argument('--epochs', default=100, type=int, help='number of total epochs to run')
     parser.add_argument('--workers', default=8, type=int, help='number of data loading workers')
     parser.add_argument('--lr', default=1e-3, type=float, help='initial learning rate')
+    parser.add_argument('--momentum', default=0.9, type=float, help='momentum')
+    parser.add_argument('--weight-decay', default=5e-4, type=float, help='weight decay')
     parser.add_argument('--T', default=4, type=int, help='simulation time steps')
     parser.add_argument('--tau', default=2.0, type=float, help='membrane time constant')
     parser.add_argument('--alpha', default=4.0, type=float, help='surrogate gradient alpha (shape factor)')
@@ -35,6 +37,9 @@ def get_args_parser():
 
 def main(args):
     utils.init_distributed_mode(args)
+    
+    # 1. Enable cuDNN benchmark for fixed input sizes
+    torch.backends.cudnn.benchmark = True
     
     if not hasattr(args, 'gpu'):
         args.gpu = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -59,6 +64,18 @@ def main(args):
     model = ResNet19(T=args.T, num_classes=10, neuron_params=neuron_params)
     model.to(device)
 
+    # 2. PyTorch 2.0 Compile
+    # SNNs benefit significantly from kernel fusion of element-wise LIF operations.
+    # We try to compile the model if PyTorch 2.0+ is available.
+    # Disabled due to InductorError related to missing libcuda.so
+    # try:
+    #     # 'reduce-overhead' is good for small batches/models, 'max-autotune' is more aggressive.
+    #     # default mode is usually safest to start.
+    #     model = torch.compile(model)
+    #     print("PyTorch 2.0 compilation enabled.")
+    # except Exception:
+    #     pass
+
     model_without_ddp = model
     if args.distributed:
         model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(model)
@@ -66,8 +83,21 @@ def main(args):
         model_without_ddp = model.module
 
     # Optimizer & Scaler
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
-    lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    # 3. Use SGD with Momentum (Better generalization than Adam)
+    print(f"Using SGD: lr={args.lr}, momentum={args.momentum}, weight_decay={args.weight_decay}")
+    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    
+    # Learning Rate Scheduler with Warmup
+    # Standard Cosine Annealing
+    main_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs - 5)
+    
+    # Linear Warmup for first 5 epochs
+    warmup_epochs = 5
+    if args.epochs > warmup_epochs:
+        warmup_scheduler = optim.lr_scheduler.LinearLR(optimizer, start_factor=0.01, total_iters=warmup_epochs)
+        lr_scheduler = optim.lr_scheduler.SequentialLR(optimizer, schedulers=[warmup_scheduler, main_scheduler], milestones=[warmup_epochs])
+    else:
+        lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     
     scaler = torch.cuda.amp.GradScaler() # For mixed precision
 
@@ -148,6 +178,11 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
             loss = nn.CrossEntropyLoss()(output, target)
             
         scaler.scale(loss).backward()
+        
+        # Gradient Clipping
+        scaler.unscale_(optimizer)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+        
         scaler.step(optimizer)
         scaler.update()
         
