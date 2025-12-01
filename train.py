@@ -9,11 +9,13 @@ import utils.distributed as utils
 from utils.metrics import AverageMeter, accuracy
 from utils.monitor import SNNMonitor
 from data.cifar10 import get_cifar10_loaders
-from models.resnet import ResNet19
+from data.imagenet import get_imagenet_loaders
+from models.resnet import ResNet19, ResNet18
 
 def get_args_parser():
     parser = argparse.ArgumentParser(description='PyTorch SNN Training')
     parser.add_argument('--data-path', default='./data', type=str, help='dataset path')
+    parser.add_argument('--dataset', default='cifar10', type=str, choices=['cifar10', 'imagenet'], help='dataset name')
     parser.add_argument('--model', default='resnet19', type=str, help='model name')
     parser.add_argument('--batch-size', default=64, type=int, help='Batch size per GPU')
     parser.add_argument('--epochs', default=100, type=int, help='number of total epochs to run')
@@ -55,13 +57,28 @@ def main(args):
 
     # Data loaders
     print(f"Loading data from {args.data_path}")
-    train_loader, test_loader, train_sampler = get_cifar10_loaders(
-        args.data_path, args.batch_size, args.workers, args.distributed)
+    if args.dataset == 'cifar10':
+        num_classes = 10
+        train_loader, test_loader, train_sampler = get_cifar10_loaders(
+            args.data_path, args.batch_size, args.workers, args.distributed)
+    elif args.dataset == 'imagenet':
+        num_classes = 1000
+        train_loader, test_loader, train_sampler = get_imagenet_loaders(
+            args.data_path, args.batch_size, args.workers, args.distributed)
+    else:
+        raise ValueError(f"Unknown dataset: {args.dataset}")
 
     # Model
     print(f"Creating model: {args.model}")
     neuron_params = {'tau': args.tau, 'surrogate_alpha': args.alpha, 'detach_reset': True}
-    model = ResNet19(T=args.T, num_classes=10, neuron_params=neuron_params)
+    
+    if args.model == 'resnet19':
+        model = ResNet19(T=args.T, num_classes=num_classes, neuron_params=neuron_params)
+    elif args.model == 'resnet18':
+        model = ResNet18(T=args.T, num_classes=num_classes, neuron_params=neuron_params)
+    else:
+        raise ValueError(f"Unknown model: {args.model}")
+
     model.to(device)
 
     # 2. PyTorch 2.0 Compile

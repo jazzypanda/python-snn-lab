@@ -147,3 +147,91 @@ class ResNet19(nn.Module):
         output = torch.mean(x, dim=1)
         
         return output
+
+class ResNet18(nn.Module):
+    def __init__(self, T=4, num_classes=1000, neuron_params=None):
+        super().__init__()
+        self.T = T
+        self.neuron_params = neuron_params or {'tau': 2.0, 'detach_reset': True}
+        
+        self.inplanes = 64
+        
+        # ImageNet Stem
+        # (N, 3, 224, 224) -> (N, 64, 112, 112)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=2, padding=3, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        
+        # LIF instead of ReLU
+        self.lif1 = LIFNodeTriton(**self.neuron_params)
+        
+        # MaxPool: (N, 64, 112, 112) -> (N, 64, 56, 56)
+        self.maxpool = TimeDistributed(nn.MaxPool2d(kernel_size=3, stride=2, padding=1))
+        
+        # ResNet Layers
+        layers = [2, 2, 2, 2]
+        self.layer1 = self._make_layer(64, layers[0])
+        self.layer2 = self._make_layer(128, layers[1], stride=2)
+        self.layer3 = self._make_layer(256, layers[2], stride=2)
+        self.layer4 = self._make_layer(512, layers[3], stride=2)
+        
+        # Final Classification
+        self.avgpool = TimeDistributed(nn.AdaptiveAvgPool2d((1, 1)))
+        self.fc = TimeDistributed(nn.Linear(512 * SNNBasicBlock.expansion, num_classes))
+        
+        # Init weights
+        for m in self.modules():
+            if isinstance(m, nn.Conv2d):
+                nn.init.kaiming_normal_(m.weight, mode='fan_out', nonlinearity='relu')
+            elif isinstance(m, (nn.BatchNorm2d, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+    def _make_layer(self, planes, blocks, stride=1):
+        downsample = None
+        if stride != 1 or self.inplanes != planes * SNNBasicBlock.expansion:
+            downsample = nn.Sequential(
+                TimeDistributed(conv1x1(self.inplanes, planes * SNNBasicBlock.expansion, stride)),
+                TimeDistributed(nn.BatchNorm2d(planes * SNNBasicBlock.expansion)),
+            )
+
+        layers = []
+        layers.append(SNNBasicBlock(self.inplanes, planes, stride, downsample, self.neuron_params))
+        self.inplanes = planes * SNNBasicBlock.expansion
+        for _ in range(1, blocks):
+            layers.append(SNNBasicBlock(self.inplanes, planes, neuron_params=self.neuron_params))
+
+        return nn.Sequential(*layers)
+    
+    def reset(self):
+        # Reset all LIFNodes
+        for m in self.modules():
+            if hasattr(m, 'reset') and m is not self:
+                m.reset()
+
+    def forward(self, x):
+        # x: (N, C, H, W)
+        
+        # 1. Static Encoding Stem
+        x = self.conv1(x)
+        x = self.bn1(x)
+        
+        # 2. Expand to Time Dimension
+        x = x.unsqueeze(1).repeat(1, self.T, 1, 1, 1)
+        
+        # 3. SNN Processing
+        x = self.lif1(x)
+        x = self.maxpool(x) # (N, T, 64, 56, 56)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        x = self.avgpool(x)
+        x = torch.flatten(x, 2) # (N, T, 512)
+        x = self.fc(x) # (N, T, num_classes)
+        
+        # Mean over time
+        output = torch.mean(x, dim=1)
+        
+        return output
