@@ -54,6 +54,7 @@ class ResNet18(nn.Module):
         super().__init__()
         self.T = T
         self.neuron_params = neuron_params or {'tau': 2.0, 'detach_reset': True}
+        self.neuron_params['T'] = T
         
         self.inplanes = 64
         

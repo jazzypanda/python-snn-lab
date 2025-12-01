@@ -137,11 +137,20 @@ class LIFFunction(torch.autograd.Function):
 
 
 class LIFNodeTriton(torch.nn.Module):
-    def __init__(self, tau=2.0, v_threshold=1.0, surrogate_alpha=4.0, detach_reset=True):
+    """
+    Optimized LIF neuron using Triton kernels.
+    
+    Expected input: (N*T, ...) flattened batch
+    Output: (N*T, ...) flattened batch
+    """
+    def __init__(self, T=4, tau=2.0, v_threshold=1.0, surrogate_alpha=4.0, detach_reset=True, **kwargs):
         super().__init__()
+        self.T = T
         self.decay = 1.0 - 1.0 / tau
         self.v_threshold = v_threshold
         self.alpha = surrogate_alpha
+        # detach_reset is implicit in our backward (we don't backprop through reset)
+        
         self.register_buffer('v', None, persistent=False)
     
     def reset(self):
