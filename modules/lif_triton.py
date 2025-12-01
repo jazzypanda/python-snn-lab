@@ -92,11 +92,12 @@ def lif_bwd_kernel(
         grad_v = grad_v + grad_spike_t * surrogate
         
         # dL/dx = dL/dv (since v = decay*v + x)
-        tl.store(grad_x_ptr + offset, grad_v.to(tl.float16), mask=mask)
+        # Store as the original dtype of the pointer
+        tl.store(grad_x_ptr + offset, grad_v.to(grad_x_ptr.dtype.element_ty), mask=mask)
         
         grad_v = grad_v * decay
     
-    tl.store(grad_v_init_ptr + neuron_idx, grad_v.to(tl.float16), mask=mask)
+    tl.store(grad_v_init_ptr + neuron_idx, grad_v.to(grad_v_init_ptr.dtype.element_ty), mask=mask)
 
 
 class LIFFunction(torch.autograd.Function):
@@ -107,6 +108,10 @@ class LIFFunction(torch.autograd.Function):
         v_init: (num_neurons,)
         """
         num_neurons = x_flat.shape[0]
+        
+        # Ensure contiguous inputs for kernel safety
+        x_flat = x_flat.contiguous()
+        v_init = v_init.contiguous()
         
         # Allocate outputs
         spike_flat = torch.empty_like(x_flat)
@@ -135,6 +140,10 @@ class LIFFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_spike, grad_v_final):
         v_pre, = ctx.saved_tensors
+        
+        # Critical: Ensure contiguous memory for Triton pointer math
+        grad_spike = grad_spike.contiguous()
+        v_pre = v_pre.contiguous()
         
         grad_x = torch.empty_like(grad_spike)
         grad_v_init = torch.empty(ctx.num_neurons, device=grad_spike.device, dtype=grad_spike.dtype)

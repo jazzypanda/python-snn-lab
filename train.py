@@ -27,6 +27,8 @@ def get_args_parser():
     parser.add_argument('--T', default=4, type=int, help='simulation time steps')
     parser.add_argument('--tau', default=2.0, type=float, help='membrane time constant')
     parser.add_argument('--alpha', default=4.0, type=float, help='surrogate gradient alpha (shape factor)')
+    parser.add_argument('--amp-dtype', default='float16', type=str, choices=['float16', 'bfloat16'], 
+                        help='Autocast dtype. bfloat16 is recommended for Ampere+ GPUs and does not use GradScaler.')
     parser.add_argument('--output-dir', default='./output', help='path where to save, empty for no save')
     parser.add_argument('--resume', default='', help='resume from checkpoint')
     parser.add_argument('--start-epoch', default=0, type=int, help='start epoch')
@@ -117,7 +119,12 @@ def main(args):
     else:
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     
-    scaler = torch.amp.GradScaler(device=args.gpu) # For mixed precision
+    # AMP Configuration
+    args.autocast_dtype = torch.bfloat16 if args.amp_dtype == 'bfloat16' else torch.float16
+    use_scaler = (args.autocast_dtype == torch.float16)
+    
+    scaler = torch.amp.GradScaler(device='cuda') if use_scaler else None 
+    print(f"AMP Config: dtype={args.amp_dtype}, use_scaler={use_scaler}")
 
     # Monitor & Writer
     writer = None
@@ -176,8 +183,7 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
     model.train()
     # Disable monitor mode for training
     if hasattr(model, 'module'):
-        # access underlying model if DDP
-        pass # We rely on default being False
+        pass 
     
     metric_logger = AverageMeter('Loss', ':.4f')
     acc_logger = AverageMeter('Acc', ':.2f')
@@ -195,18 +201,22 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
             
         optimizer.zero_grad()
         
-        with torch.amp.autocast(device_type=args.gpu):
+        with torch.amp.autocast(device_type='cuda', dtype=args.autocast_dtype):
             output = model(image)
             loss = nn.CrossEntropyLoss()(output, target)
             
-        scaler.scale(loss).backward()
-        
-        # Gradient Clipping
-        scaler.unscale_(optimizer)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
-        
-        scaler.step(optimizer)
-        scaler.update()
+        if scaler is not None:
+            # FP16 flow with Scaler
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # BF16 flow (No Scaler)
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=5.0)
+            optimizer.step()
         
         acc1, = accuracy(output, target, topk=(1,))
         batch_size = image.shape[0]
