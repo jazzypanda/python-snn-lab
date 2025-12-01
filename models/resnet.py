@@ -63,28 +63,21 @@ class ResNet19(nn.Module):
         self.T = T
         self.neuron_params = neuron_params or {'tau': 2.0, 'detach_reset': True}
         
-        # Direct Encoder: (N, C, H, W) -> (N, T, C, H, W)
-        self.encoder = DirectEncoder(T)
+        # Optimization: Remove DirectEncoder. 
+        # We will handle the time dimension expansion manually after the first layer.
         
         self.inplanes = 64
         
-        # Initial Layer
+        # Initial Layer - Optimized
         # Input is 3 channels (RGB)
-        self.conv1 = TimeDistributed(nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False))
-        self.bn1 = TimeDistributed(nn.BatchNorm2d(64))
+        # We use standard Conv2d and BatchNorm2d here (computed once per image)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False)
+        self.bn1 = nn.BatchNorm2d(64)
+        
+        # LIF layer still needs to handle temporal dynamics
         self.lif1 = LIFNodeTriton(**self.neuron_params)
         
         # ResNet Layers
-        # ResNet18 usually has [2, 2, 2, 2] blocks. 
-        # ResNet19 usually implies a specific variant or just depth. 
-        # Standard ResNet18 is 18 layers (1 conv + 8*2 blocks + 1 fc).
-        # Let's stick to standard ResNet18 structure which is close to 19.
-        # Or if "ResNet19" refers to VGG-style 19? 
-        # User said "ResNet19", which is a common SNN paper architecture (e.g., Direct Training for Spiking Neural Networks).
-        # It is often: Conv-BN-LIF x3 -> ResBlock x3 ... 
-        # Let's implement standard ResNet18 structure first as it's robust.
-        # Layers: [2, 2, 2, 2]
-        
         layers = [2, 2, 2, 2]
         self.layer1 = self._make_layer(64, layers[0])
         self.layer2 = self._make_layer(128, layers[1], stride=2)
@@ -127,10 +120,18 @@ class ResNet19(nn.Module):
 
     def forward(self, x):
         # x: (N, C, H, W)
-        x = self.encoder(x) # -> (N, T, C, H, W)
         
+        # 1. Static Encoding (Optimized)
+        # Compute features once for the static image
         x = self.conv1(x)
-        x = self.bn1(x)
+        x = self.bn1(x) 
+        # x shape: (N, 64, H, W)
+        
+        # 2. Expand to Time Dimension
+        # (N, C, H, W) -> (N, T, C, H, W)
+        x = x.unsqueeze(1).repeat(1, self.T, 1, 1, 1)
+        
+        # 3. SNN Processing
         x = self.lif1(x)
 
         x = self.layer1(x)
@@ -142,9 +143,7 @@ class ResNet19(nn.Module):
         x = torch.flatten(x, 2) # (N, T, 512)
         x = self.fc(x) # (N, T, num_classes)
         
-        # Mean over time for prediction (Voting or Mean Potential)
-        # Requirement: "不发射脉冲，直接用膜电位计算交叉熵"
-        # This usually means we take the average output of the last linear layer over T.
+        # Mean over time for prediction
         output = torch.mean(x, dim=1)
         
         return output
