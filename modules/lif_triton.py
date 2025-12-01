@@ -19,30 +19,28 @@ def lif_fwd_kernel(
     neuron_idx = pid * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
     mask = neuron_idx < num_neurons
     
-    # Load initial membrane potential using pointer's dtype
-    v = tl.load(v_init_ptr + neuron_idx, mask=mask, other=0.0)
+    # Load initial membrane potential and immediately promote to fp32
+    v_init = tl.load(v_init_ptr + neuron_idx, mask=mask, other=0.0)
+    v = v_init.to(tl.float32)
     
     for t in range(T):
         offset = neuron_idx * T + t
-        x_t = tl.load(x_ptr + offset, mask=mask, other=0.0)
+        x_t = tl.load(x_ptr + offset, mask=mask, other=0.0).to(tl.float32)
         
-        # Compute in float32 for precision
-        v_f32 = v.to(tl.float32)
-        x_t_f32 = x_t.to(tl.float32)
+        # LIF dynamics (all in fp32)
+        v = v * decay + x_t
         
-        v_f32 = v_f32 * decay + x_t_f32
+        # Store v_pre for backward (cast to ptr dtype)
+        tl.store(v_pre_ptr + offset, v.to(v_pre_ptr.dtype.element_ty), mask=mask)
         
-        # Store v_pre for backward (in original dtype)
-        tl.store(v_pre_ptr + offset, v_f32.to(v_pre_ptr.dtype.element_ty), mask=mask)
-        
-        spike = (v_f32 >= v_threshold)
+        spike = (v >= v_threshold)
         tl.store(spike_ptr + offset, spike, mask=mask)
         
         # Soft reset
-        v_f32 = v_f32 - spike.to(tl.float32) * v_threshold
-        v = v_f32.to(v.dtype) # Cast back to register dtype
+        v = v - spike.to(tl.float32) * v_threshold
     
-    tl.store(v_final_ptr + neuron_idx, v, mask=mask)
+    # Store final v (cast to ptr dtype)
+    tl.store(v_final_ptr + neuron_idx, v.to(v_final_ptr.dtype.element_ty), mask=mask)
 
 
 @triton.jit  
