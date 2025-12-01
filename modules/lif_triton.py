@@ -195,8 +195,13 @@ class LIFNodeTriton(torch.nn.Module):
         # x_flat is contiguous by definition of flatten (usually), but safeguard:
         x_flat = x_flat.contiguous()
         
+        # CRITICAL: Detach v_init to prevent gradient history leakage from previous batches
+        # This ensures we start a fresh graph for every batch, avoiding "Graph freed" errors.
+        v_init = self.v.detach()
+        v_init = v_init.contiguous()
+        
         spike_flat, self.v = LIFFunction.apply(
-            x_flat, self.v, self.T, self.decay, self.v_threshold, self.alpha
+            x_flat, v_init, self.T, self.decay, self.v_threshold, self.alpha
         )
         
         # 5. Reshape back to (N*T, ...)
