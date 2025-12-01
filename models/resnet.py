@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from modules.neuron import LIFNode
+from modules.lif_triton import LIFNodeTriton
 from modules.layer import TimeDistributed, DirectEncoder
 
 def conv3x3(in_planes, out_planes, stride=1):
@@ -24,13 +25,13 @@ class SNNBasicBlock(nn.Module):
         # We wrap stateless layers in TimeDistributed
         self.conv1 = TimeDistributed(conv3x3(inplanes, planes, stride))
         self.bn1 = TimeDistributed(nn.BatchNorm2d(planes))
-        self.lif1 = LIFNode(**self.neuron_params)
+        self.lif1 = LIFNodeTriton(**self.neuron_params)
         
         self.conv2 = TimeDistributed(conv3x3(planes, planes))
         self.bn2 = TimeDistributed(nn.BatchNorm2d(planes))
         
         # Note: The second LIF is after the addition in ResNet
-        self.lif2 = LIFNode(**self.neuron_params)
+        self.lif2 = LIFNodeTriton(**self.neuron_params)
         
         self.downsample = downsample
         self.stride = stride
@@ -71,7 +72,7 @@ class ResNet19(nn.Module):
         # Input is 3 channels (RGB)
         self.conv1 = TimeDistributed(nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1, bias=False))
         self.bn1 = TimeDistributed(nn.BatchNorm2d(64))
-        self.lif1 = LIFNode(**self.neuron_params)
+        self.lif1 = LIFNodeTriton(**self.neuron_params)
         
         # ResNet Layers
         # ResNet18 usually has [2, 2, 2, 2] blocks. 
