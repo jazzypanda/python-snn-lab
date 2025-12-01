@@ -99,7 +99,7 @@ def main(args):
     else:
         lr_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     
-    scaler = torch.cuda.amp.GradScaler() # For mixed precision
+    scaler = torch.amp.GradScaler(device=args.gpu) # For mixed precision
 
     # Monitor & Writer
     writer = None
@@ -173,7 +173,7 @@ def train_one_epoch(model, optimizer, loader, device, epoch, scaler, writer, arg
             
         optimizer.zero_grad()
         
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast(device_type=args.gpu):
             output = model(image)
             loss = nn.CrossEntropyLoss()(output, target)
             
