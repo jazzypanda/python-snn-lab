@@ -28,6 +28,14 @@ def get_imagenet_loaders(data_dir, batch_size=64, num_workers=8, distributed=Fal
     train_dir = os.path.join(data_dir, 'train')
     val_dir = os.path.join(data_dir, 'val')
 
+    if not os.path.isdir(train_dir):
+        # Try looking into ILSVRC2012 subdirectory (common in AutoDL)
+        potential_dir = os.path.join(data_dir, 'ILSVRC2012')
+        if os.path.isdir(os.path.join(potential_dir, 'train')):
+            print(f"Detected ImageNet structure inside ILSVRC2012. Updating paths...")
+            train_dir = os.path.join(potential_dir, 'train')
+            val_dir = os.path.join(potential_dir, 'val')
+
     train_set = torchvision.datasets.ImageFolder(
         root=train_dir, transform=transform_train)
     
