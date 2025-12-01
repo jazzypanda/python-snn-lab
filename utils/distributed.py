@@ -13,6 +13,9 @@ def init_distributed_mode(args):
     else:
         print('Not using distributed mode')
         args.distributed = False
+        args.rank = 0
+        args.world_size = 1
+        args.gpu = 0
         return
 
     args.distributed = True
@@ -23,21 +26,6 @@ def init_distributed_mode(args):
     dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
                             world_size=args.world_size, rank=args.rank)
     dist.barrier()
-    setup_for_distributed(args.rank == 0)
-
-def setup_for_distributed(is_master):
-    """
-    This function disables printing when not in master process
-    """
-    import builtins as __builtin__
-    builtin_print = __builtin__.print
-
-    def print(*args, **kwargs):
-        force = kwargs.pop('force', False)
-        if is_master or force:
-            builtin_print(*args, **kwargs)
-
-    __builtin__.print = print
 
 def is_dist_avail_and_initialized():
     if not dist.is_available():
