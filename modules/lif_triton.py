@@ -148,37 +148,65 @@ class LIFNodeTriton(torch.nn.Module):
         self.v = None
     
     def forward(self, x):
-        # x: (N, T, ...)
-        N, T = x.shape[:2]
-        # Flatten: (N, T, ...) -> (N * ... , T)
-        x_flat = x.flatten(0, 1) if x.dim() == 2 else x.transpose(1, -1).flatten(0, -2) 
-        # Logic check: 
-        # If (N, T, C, H, W) -> want (N*C*H*W, T)
-        # transpose(1, -1) -> (N, W, C, H, T) ... messy.
+        """
+        x: (Batch, ...) where Batch = N * T
+        Output: (Batch, ...)
+        """
+        # 1. Check dimensions
+        Batch = x.shape[0]
+        if Batch % self.T != 0:
+            raise ValueError(f"Batch size {Batch} must be divisible by T={self.T}")
         
-        # Cleaner flatten logic:
+        N = Batch // self.T
+        
+        # 2. Prepare for Kernel: We need (Neurons, T) layout where Neurons = N * Spatial
+        # Input x is (N*T, C, H, W) or (N*T, C)
+        
         if x.dim() > 2:
-            # (N, T, C, H, W) -> permute T to end -> (N, C, H, W, T) -> flatten -> (N*C*H*W, T)
-            x_flat = x.permute(0, *range(2, x.dim()), 1).flatten(0, -2)
+            # Case: Conv Layer Output (N*T, C, H, W)
+            # We want to group T together.
+            # View as (N, T, C, H, W)
+            # Permute to (N, C, H, W, T) to get T last
+            # Flatten to (N*C*H*W, T)
+            x_reshaped = x.view(N, self.T, *x.shape[1:])
+            x_flat = x_reshaped.permute(0, *range(2, x_reshaped.dim()), 1).flatten(0, -2)
         else:
-            x_flat = x
-            
+            # Case: FC Layer Output (N*T, C)
+            # View as (N, T, C) -> Permute (N, C, T) -> Flatten (N*C, T)
+            x_reshaped = x.view(N, self.T, -1)
+            x_flat = x_reshaped.permute(0, 2, 1).flatten(0, 1)
+
         num_neurons = x_flat.shape[0]
 
+        # 3. Initialize State
         if self.v is None or self.v.shape[0] != num_neurons:
             self.v = torch.zeros(num_neurons, device=x.device, dtype=x.dtype)
         
-        # Execute
+        # 4. Run Triton Kernel
+        # x_flat is contiguous by definition of flatten (usually), but safeguard:
+        x_flat = x_flat.contiguous()
+        
         spike_flat, self.v = LIFFunction.apply(
-            x_flat, self.v, T, self.decay, self.v_threshold, self.alpha
+            x_flat, self.v, self.T, self.decay, self.v_threshold, self.alpha
         )
         
-        # Reshape back
+        # 5. Reshape back to (N*T, ...)
+        # spike_flat is (Neurons, T) -> (N*C*H*W, T)
         if x.dim() > 2:
-            # (N*C*H*W, T) -> (N, C, H, W, T) -> (N, T, C, H, W)
-            input_spatial = x.shape[2:]
-            spike = spike_flat.view(N, *input_spatial, T).permute(0, -1, *range(1, x.dim()-1))
+            # (N*C*H*W, T) -> (N, C, H, W, T) -> (N, T, C, H, W) -> (N*T, C, H, W)
+            spatial_dims = x.shape[1:] # (C, H, W)
+            # We need to carefully reverse the flatten/permute
+            # View: (N, C, H, W, T)
+            spike = spike_flat.view(N, *spatial_dims, self.T)
+            # Permute: (N, T, C, H, W)
+            spike = spike.permute(0, -1, *range(1, spike.dim()-1))
+            # Flatten Batch: (N*T, C, H, W)
+            output = spike.flatten(0, 1)
         else:
-            spike = spike_flat
+            # (N*C, T) -> (N, C, T) -> (N, T, C) -> (N*T, C)
+            features = x.shape[1]
+            spike = spike_flat.view(N, features, self.T)
+            spike = spike.permute(0, 2, 1)
+            output = spike.flatten(0, 1)
             
-        return spike
+        return output
