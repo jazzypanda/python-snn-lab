@@ -15,6 +15,7 @@ from models.resnet import ResNet19, ResNet18
 def get_args_parser():
     parser = argparse.ArgumentParser(description='PyTorch SNN Training')
     parser.add_argument('--data-path', default='./data', type=str, help='dataset path')
+    parser.add_argument('--extract-root', default=None, type=str, help='path to extract dataset to (e.g. /root/autodl-tmp)')
     parser.add_argument('--dataset', default='cifar10', type=str, choices=['cifar10', 'imagenet'], help='dataset name')
     parser.add_argument('--model', default='resnet19', type=str, help='model name')
     parser.add_argument('--batch-size', default=64, type=int, help='Batch size per GPU')
@@ -64,7 +65,7 @@ def main(args):
     elif args.dataset == 'imagenet':
         num_classes = 1000
         train_loader, test_loader, train_sampler = get_imagenet_loaders(
-            args.data_path, args.batch_size, args.workers, args.distributed)
+            args.data_path, args.batch_size, args.workers, args.distributed, args.extract_root)
     else:
         raise ValueError(f"Unknown dataset: {args.dataset}")
 
@@ -136,7 +137,10 @@ def main(args):
             args.start_epoch = 0 # Restart if finished
 
     if args.test_only:
-        evaluate(model, test_loader, device, args.T)
+        if test_loader is not None:
+            evaluate(model, test_loader, device, args.T)
+        else:
+            print("Test loader unavailable. Skipping evaluation.")
         return
 
     print("Start training")
@@ -151,7 +155,8 @@ def main(args):
         
         # Validate & Monitor
         # Use monitor only on main process and only for a subset of test data to save time/space
-        acc = evaluate(model, test_loader, device, epoch, writer, monitor, args)
+        if test_loader is not None:
+            acc = evaluate(model, test_loader, device, epoch, writer, monitor, args)
         
         if args.output_dir:
             checkpoint = {
