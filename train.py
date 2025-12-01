@@ -153,8 +153,10 @@ def train_one_epoch(model, optimizer, loader, device, epoch, writer, args):
     for i, (image, target) in enumerate(loader):
         image, target = image.to(device, non_blocking=True), target.to(device, non_blocking=True)
         
-        if hasattr(model, 'reset'): model.reset()
-        elif hasattr(model.module, 'reset'): model.module.reset()
+        if hasattr(model, 'reset'):
+            model.reset()
+        elif hasattr(model, 'module') and hasattr(model.module, 'reset'):
+            model.module.reset()
             
         optimizer.zero_grad()
         
@@ -189,8 +191,10 @@ def evaluate(model, loader, device, epoch, writer, args):
         for image, target in loader:
             image, target = image.to(device, non_blocking=True), target.to(device, non_blocking=True)
             
-            if hasattr(model, 'reset'): model.reset()
-            elif hasattr(model.module, 'reset'): model.module.reset()
+            if hasattr(model, 'reset'):
+                model.reset()
+            elif hasattr(model, 'module') and hasattr(model.module, 'reset'):
+                model.module.reset()
             
             # BF16 Inference
             with torch.amp.autocast(device_type='cuda', dtype=torch.bfloat16):
